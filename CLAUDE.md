@@ -43,7 +43,9 @@ for that sport, not translated knob-for-knob.
 | Individual streaks | hit streaks | scoring runs (`p.gStreak`) | point streaks |
 | Player compare | Players tab | Players tab (`CompareCard`) | `CompareModal` |
 | Sim to the deadline | Hub "Sim to Deadline" | Hub "Skip 7 weeks" | header "To deadline" |
-| One-press full-year / multi-season sim | — (offseason lives in `OffseasonHub`) | ✓ (auto-manage) | `simFullYear` (`autoManage`) |
+| Multi-season sim (club runs itself) | `simToNextSeason` — Hub "Sim ahead" 1/5/10 | `SimYears` "Auto-sim seasons" (1–100) | `simYears` — header "Sim year" / 5 / 10 |
+| "While you were away" report | `SimReport` (`G.simReport`) | `SimReportCard` (`G.simReport`) | `SimReportCard` (`G.simReport`) |
+| Job safe during long sims | ✓ (Settings → "Job risk in long sims") | ✓ (sacking muted) | ✓ (`G._simAway`) |
 | HoF with voting ballot | ✓ | inducted on retirement | inducted after `HOF_WAIT` |
 | Draft | ✓ (+ college, HS, IFA) | — (youth academy) | ✓ |
 
@@ -673,8 +675,27 @@ for that sport, not translated knob-for-knob.
 - **The iOS wrapper** (`PocketGM-Baseball-iOS`) is optional now that the hub serves an installable,
   offline-capable PWA. Its `sync-game.py` was broken (it looked for the old CDN `<head>`); it now copies
   `index.html` + `vendor/` straight across.
-- **Known gap vs. the siblings:** no one-press "sim a full year / N years". The offseason processing lives
-  inside the `OffseasonHub` component (`doProgression` closure) rather than an engine function, and the
-  harness has no offseason coverage. Lifting it to `processOffseason(G)` + an engine auto-draft is the
-  prerequisite — do that (with a harness check) before adding the button.
 
+## Multi-season sim (2026-09)
+- **The offseason is an engine call now.** `processOffseason(G)` is the old `doProgression` closure lifted out of
+  `OffseasonHub` (which now just calls it + commits). `draftAssign`/`autoDraftRest` are the draft's engine half
+  (the Draft tab's `assign`/`simAll` use them). This is also the harness's first offseason coverage.
+- **`aiRunsTeam(G, id)`** is the single "does the AI manage this club?" gate — true for AI clubs, and for YOUR club
+  while `G._autoUser` is set. Every former `t.id!==G.userTeamId` skip in the market/offseason code
+  (`refreshFAMarket`, `processFAWave`, `processIFAWave`, `aiSignIFAs`, the AI re-sign in `processOffseason`, the
+  fill loop in `startNewSeason`) routes through it. Add new "skip the user" checks through it too.
+- **`simToNextSeason(G)`** runs from any phase to next opening day with `_autoUser` on: rest of the regular season
+  (pressers answered with the middle option, incoming trade offers dropped), the playoffs, `processOffseason`,
+  `autoDraftRest`, `startNewSeason`, lineups reset. Returns a `seasonReportRow` (record, division place, playoffs,
+  title, your players' season awards — one-game feats in `REPORT_SKIP` excluded — All-Star count, payroll), or null
+  if you were fired. `SimAhead` (Hub in every phase: regular / playoffs card / both offseason steps) runs 1, 5 or
+  10 seasons one per tick with a progress bar; rows land on `G.simReport`, rendered by `SimReport` on the Hub.
+- **Job safety:** `evalOwnerMandate` doesn't add a strike while `_autoUser` is on unless `settings.simJobRisk`
+  (Settings → "Job risk in long sims"). Measured: without it an auto-managed club was fired in year 4.
+- **Perf fix:** `refreshFAMarket` computed `capSpaceFor` (a full player-dict scan) per club *per free agent* —
+  ~40M visits per refresh, run ~7× every offseason. Cached once per club: a 162-game season + offseason went from
+  ~7s→18s (growing each year) to a flat ~5s.
+- **Known, pre-existing:** AI clubs spend about half their budget (~$90M of ~$160M league-wide); the auto-managed
+  user club behaves the same. Budgets act as ceilings, not targets.
+- `multiSeason` check: four 54-game seasons through the full loop — rollovers, rosters, rotations, drafts (incl.
+  yours), bounded player pool, serializable save, and a balanced season afterwards.

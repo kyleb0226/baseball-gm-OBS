@@ -2611,6 +2611,9 @@ function SettingsModal({G, commit, tShow, onClose}){
         <Toggle on={s.potm!==false} label="Player of the Month"
           desc="Hand out monthly Player/Pitcher of the Month awards and track month-by-month splits."
           set={()=>{ s.potm = !(s.potm!==false); force(x=>x+1); commit(G); tShow(s.potm?"Monthly awards ON":"Monthly awards OFF"); }} />
+        <Toggle on={!!s.simJobRisk} label="Job risk in long sims"
+          desc="Off: while 'Sim N years' runs your club, a bad season can't earn you a strike. On: the owner judges those years like any other — you can come back to find yourself fired."
+          set={()=>{ s.simJobRisk = !s.simJobRisk; force(x=>x+1); commit(G); tShow(s.simJobRisk?"Long sims can get you fired":"Long sims are safe"); }} />
         <Toggle on={s.events!==false} label="League events"
           desc="Rare franchise-shaking shocks: takeovers, scandals, career-ending injuries, generational recruits, mutinies, financial crises."
           set={()=>{ s.events = !(s.events!==false); force(x=>x+1); commit(G); tShow(s.events!==false?"League events ON":"League events OFF"); }} />
@@ -3515,6 +3518,87 @@ function userNextGame(G){
   return null;
 }
 
+// "Sim ahead": next season / 5 / 10 years from ANY phase, with your club run by the AI for
+// the duration (aiRunsTeam). One season per tick so the page can show progress; each finished
+// season appends a row to G.simReport, which the Hub renders as a report card.
+function SimAhead({G, commit, tShow, compact}){
+  const [prog,setProg]=useState(null);   // {done, total} while running
+  const run = (n)=>{
+    if(prog) return;
+    if(n>1 && !window.confirm(`Sim ${n} seasons? Your club will be run by the AI — contracts, free agency, the draft and your lineup — until opening day ${G.season+n}.`)) return;
+    G.simReport = [];
+    setProg({done:0, total:n});
+    const step = (i)=>{
+      let row=null;
+      try{ row = simToNextSeason(G); }catch(e){ console.error("[pocketgm] sim-ahead", e); }
+      if(row) G.simReport.push(row);
+      const stop = !row || G.gmFired || i+1>=n;
+      if(stop){
+        commit(G); setProg(null);
+        tShow(G.gmFired ? "You've been fired." : row ? `Opening day ${G.season} — ${G.simReport.length} season${G.simReport.length>1?"s":""} simmed` : "Sim stopped");
+        return;
+      }
+      setProg({done:i+1, total:n});
+      setTimeout(()=>step(i+1), 20);
+    };
+    setTimeout(()=>step(0), 20);
+  };
+  const btn="px-3 py-2 rounded-lg text-sm disabled:opacity-50 ";
+  return (
+    <div className={compact?"":"mt-3 pt-3 border-t border-[#1d2940]"}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-400 mr-1">⏭ Sim ahead</span>
+        <button disabled={!!prog} onClick={()=>run(1)} className={btn+"bg-[#16213a] hover:bg-[#1c2c4a]"} title="Finish this season (playoffs, offseason, draft, free agency) and stop on opening day">To next season</button>
+        <button disabled={!!prog} onClick={()=>run(5)} className={btn+"bg-[#16213a] hover:bg-[#1c2c4a]"}>5 years</button>
+        <button disabled={!!prog} onClick={()=>run(10)} className={btn+"bg-[#16213a] hover:bg-[#1c2c4a]"}>10 years</button>
+      </div>
+      {prog && <div className="mt-2">
+        <div className="text-xs text-slate-400 mb-1">Simulating season {prog.done+1} of {prog.total}…</div>
+        <div className="h-1.5 bg-[#16213a] rounded"><div className="h-1.5 bg-emerald-500 rounded" style={{width:`${Math.round(prog.done/prog.total*100)}%`}}/></div>
+      </div>}
+    </div>
+  );
+}
+// The report card after a multi-season sim: one row per season for your club.
+function SimReport({G, commit}){
+  const rows=G.simReport||[];
+  if(!rows.length) return null;
+  const W=rows.reduce((a,r)=>a+r.w,0), L=rows.reduce((a,r)=>a+r.l,0);
+  const titles=rows.filter(r=>r.champ).length, po=rows.filter(r=>r.made).length;
+  const u=G.teams[G.userTeamId];
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-bold">📼 While you were away — {u.abbr}, {rows[0].season}–{rows[rows.length-1].season}</h3>
+        <button onClick={()=>{ G.simReport=[]; commit(G); }} className="text-xs text-slate-400 hover:text-slate-200">Dismiss</button>
+      </div>
+      <div className="text-sm text-slate-300 mb-2">
+        <b className="tnum">{W}-{L}</b> ({(W/Math.max(1,W+L)).toFixed(3).replace(/^0/,"")}) · {po} playoff trip{po===1?"":"s"}{titles?<span className="text-amber-300 font-semibold"> · 🏆 ×{titles}</span>:""}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm tnum">
+          <thead><tr className="text-slate-500 text-xs border-b border-[#1d2940]">
+            <th className="text-left py-1">Season</th><th>W-L</th><th>Div</th><th>Postseason</th><th className="text-left">Honours</th><th>Payroll</th><th className="text-left">Champion</th>
+          </tr></thead>
+          <tbody>
+            {rows.map(r=>(
+              <tr key={r.season} className={"border-b border-[#15203a] "+(r.champ?"bg-amber-500/10":"")}>
+                <td className="py-1">{r.season}</td>
+                <td className="text-center">{r.w}-{r.l}</td>
+                <td className="text-center">#{r.place}</td>
+                <td className="text-center">{r.champ?"🏆 Won it all":r.made?"✓":"—"}</td>
+                <td className="text-left text-xs text-slate-300">{[r.allStars?`${r.allStars} All-Star${r.allStars>1?"s":""}`:null, ...r.awards].filter(Boolean).join(" · ")||"—"}</td>
+                <td className="text-center">{money(r.payroll)}</td>
+                <td className="text-left text-xs text-slate-400">{r.champName}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 function Hub({G, commit, tShow, setTab}){
   const user = G.teams[G.userTeamId];
   const [busy,setBusy]=useState(false);
@@ -3546,7 +3630,8 @@ function Hub({G, commit, tShow, setTab}){
   if(G.phase==="playoffs"){
     return <Card><div className="text-lg font-bold mb-2">🏆 Postseason is here!</div>
       <p className="text-slate-300 mb-3">The regular season is complete. Head to the Playoffs tab to advance the bracket.</p>
-      <button onClick={()=>setTab("playoffs")} className="px-4 py-2 bg-emerald-500 text-slate-900 rounded-lg font-semibold">Go to Playoffs →</button></Card>;
+      <button onClick={()=>setTab("playoffs")} className="px-4 py-2 bg-emerald-500 text-slate-900 rounded-lg font-semibold">Go to Playoffs →</button>
+      <SimAhead G={G} commit={commit} tShow={tShow} /></Card>;
   }
   if(G.phase==="offseason"){
     return <OffseasonHub G={G} commit={commit} tShow={tShow} setTab={setTab} />;
@@ -3557,6 +3642,7 @@ function Hub({G, commit, tShow, setTab}){
 
   return (
     <div className="space-y-4">
+      <SimReport G={G} commit={commit} />
       <div className="grid sm:grid-cols-3 gap-3">
         <Card><div className="text-slate-400 text-xs">RECORD</div><div className="text-2xl font-bold tnum">{user.w}-{user.l}</div><div className="text-xs text-slate-500">{f3(pct(user))} · {user.division} #{rank}{user.fanMood!=null?<span> · {user.fanMood>=75?"🔥":user.fanMood>=55?"🙂":user.fanMood>=40?"😐":"😡"} fans {user.fanMood}</span>:null}{G.nemesis&&G.teams[G.nemesis.teamId]&&G.teams[G.nemesis.teamId].gm?<span className="text-red-400/80"> · 😠 nemesis: {G.nemesis.name} ({G.teams[G.nemesis.teamId].abbr})</span>:null}</div></Card>
         <Card><div className="text-slate-400 text-xs">RUN DIFF</div><div className={"text-2xl font-bold tnum "+((user.rs-user.ra)>=0?"text-emerald-400":"text-red-400")}>{user.rs-user.ra>=0?"+":""}{user.rs-user.ra}</div><div className="text-xs text-slate-500">{user.rs} RS / {user.ra} RA</div></Card>
@@ -3830,6 +3916,7 @@ function Hub({G, commit, tShow, setTab}){
           <button disabled={busy} onClick={()=>runDays(400)} className="px-4 py-2 bg-[#16213a] rounded-lg hover:bg-[#1c2c4a] disabled:opacity-50">Sim to Playoffs</button>
         </div>
         {busy && <div className="text-xs text-slate-400 mt-2">Simulating…</div>}
+        <SimAhead G={G} commit={commit} tShow={tShow} />
         <div className="text-xs text-slate-500 mt-2">
           {!rules(G).tradeDeadlineOn
             ? "🔓 No trade deadline — the market stays open all season"
@@ -6786,7 +6873,7 @@ function buildSeasonRecap(G){
   const uPit=Object.values(G.players).filter(p=>p.teamId===u.id && p.isP && p.stats.OUT>0);
   const uBestH=top(uHit,p=>warOf(p,warCtx,levelStats(p,"MLB"))), uBestP=top(uPit,p=>warOf(p,warCtx,levelStats(p,"MLB")));
   const div=standings(G.teams)[u.league+" "+u.division]; const place=div.findIndex(t=>t.id===u.id)+1;
-  const seeds=playoffSeeds(G.teams,u.league).map(t=>t.id);
+  const seeds=playoffSeeds(G.teams,u.league,rules(G).playoffTeams).map(t=>t.id);
   const bestTeam=G.teams.reduce((b,t)=>(b==null||t.w>b.w)?t:b,null);
   // awards won by the user's players this season
   const userAwards=[];
@@ -7398,153 +7485,245 @@ function startOffseason(G){
   G.offStep = "intro";
 }
 
+// The offseason in one engine call: record + age + develop every player, retirements and
+// the Hall of Fame vote, contracts (arbitration, QOs, opt-outs, AI re-signings, expiry to
+// FA), then the draft class and the opening of the free-agent market. Lifted out of
+// OffseasonHub so the multi-season sim (and the harness) can run it without the UI.
+function processOffseason(G){
+  const warCtx = leagueWarCtx(G);   // league avg wOBA/FIP for the season that just ended (before any reset)
+  Object.values(G.players).forEach(p=>{
+    recordSeasonHistory(p, G.season);   // log the year that just ended (team[s], stats) before aging
+    // stamp WAR onto this season's MLB history row(s) using that season's league context
+    p.history.filter(h=>h.season===G.season && h.level==="MLB").forEach(h=>{ h.war = +warOf(p, warCtx, h.stats).toFixed(1); });
+    const before = p.ovr;
+    p.age++;
+    // Directed development: young players climb toward their potential; prospects in
+    // AAA grow faster; performers (esp. promoted early) keep climbing; older players decline.
+    const gap = p.pot - p.ovr;            // remaining room to ceiling
+    const perf = seasonPerf(p);           // how he played this year
+    let center;
+    if(p.age<=23)      center = 1.5 + gap*0.16;            // fast risers
+    else if(p.age<=26) center = 0.6 + gap*0.11;
+    else if(p.age<=28) center = 0.05 + gap*0.05;           // last bit of growth, then peak
+    else if(p.age<=30) center = -0.5;                      // gentle decline begins
+    else if(p.age<=33) center = -1.1 - (p.age-30)*0.25;
+    else               center = -2.2 - (p.age-33)*0.4;     // age cliff
+    if((isAAAId(p.teamId)||isCollegeId(p.teamId)) && p.age<=25) center += 1.2;   // minors/college development boost
+    // performance: young producers develop faster, vets who rake age gracefully, busts stall
+    if(p.age<=27) center += perf.score * perf.weight * 1.6;
+    else          center += perf.score * perf.weight * 0.7;
+    center = clamp(center*0.6, -3.5, 3.0);   // reduced — most development now happens IN-SEASON (inSeasonDev)
+    const each = r=>{ if(p[r]!==undefined) p[r]=clamp(round(p[r]+gauss(center,1.2)),20,99); };
+    (p.isP?["stu","ctl","stm"]:["con","pow","eye","spd","def"]).forEach(each);
+    computeOvr(p);
+    if(p.ovr > (p.peakOvr||0)) p.peakOvr = p.ovr;   // remember career-best OVR (for HoF)
+    // a young breakout can raise his ceiling; everyone's ceiling erodes once past their prime
+    if(p.age<=25 && (p.ovr>p.pot || (perf.score>0.7 && chance(0.5))))
+      p.pot = clamp(Math.max(p.ovr, p.pot+rint(0,3)), p.ovr, 99);
+    else if(p.age>=29) p.pot = Math.max(p.ovr, p.pot-1);
+    p._lastDelta = p.ovr - before;        // for the offseason development report
+    // reset season stats -> career. Amateur (college) stats live ONLY in history rows,
+    // never in the pro career line, so a draftee's pro totals start clean.
+    if(isCollegeId(p.teamId)) p.stats = p.isP?emptyPitStats():emptyHitStats();
+    else mergeCareer(p);
+    // a signed contract is fixed by its schedule — don't re-price it here
+  });
+  // retirements: driven by BOTH age and quality. Good players hang on (a 35+ vet who's
+  // still ~62 OVR keeps grinding); washed-up players quit much earlier the older they get.
+  // A stable per-player longevity factor adds variety so careers don't all end at once.
+  const retired=[];
+  Object.values(G.players).forEach(p=>{
+    let retP;
+    if(p.age<32) retP = 0;          // nobody retires young — careers end from age & decline only
+    else {
+      retP = (p.age-31)*0.06;                 // age ramp: 32→.06, 35→.24, 39→.48, 42→.66
+      retP -= ((p.ovr-60)/100)*1.4;           // quality: stars (>60) hang on, scrubs (<60) leave sooner
+      if(p.ovr<55) retP += (p.age-33)*0.05;   // genuinely bad + getting old → push them out
+    }
+    const lng = 0.78 + ((p.id*2654435761>>>0)%1000)/2273;   // ~0.78–1.22, stable per player
+    retP = clamp(retP*lng, 0, 0.95);
+    if(p.age>=44) retP = Math.max(retP, 0.9);                // almost nobody plays past 44
+    if(chance(retP)){ retired.push(p.id); }
+  });
+  const retiredLog=[];
+  retired.forEach(id=>{
+    const p=G.players[id]; const t=teamById(G, p.teamId);
+    nominateForHOF(G, p);                  // worthy careers go on the Hall of Fame ballot
+    if(t){ t.lineup=t.lineup.filter(x=>x!==id); t.rotation=t.rotation.filter(x=>x!==id); if(t.pos) delete t.pos[id]; }
+    G.freeAgents=G.freeAgents.filter(x=>x!==id);
+    const tName=t?(t.aaa?G.teams[parentIdOf(t.id)].abbr:t.abbr):"FA";
+    logNews(G,"roster",`${p.name} (${p.pos}, ${p.ovr} OVR, age ${p.age}) retired`, t?t.id:null);
+    if(t && (t.id===G.userTeamId || t.id===aaaIdOf(G.userTeamId)))
+      retiredLog.push({n:p.name, ovr:p.ovr, age:p.age, pos:p.pos});
+    delete G.players[id];
+  });
+  runHofVote(G);                           // hold the Hall of Fame vote (new nominees + lingering ballot)
+  // advance each rostered contract one year (drop the season just played), then expire to FA.
+  // Free agents keep their ask intact — their "contract" is a demand, not a deal in progress.
+  let userArbCount=0, userArbTotal=0;
+  Object.values(G.players).forEach(p=>{
+    if(isCollegeId(p.teamId)) return;             // amateurs: no pro contract to advance
+    if(p.teamId==null){ ensureContract(p); return; }
+    if(Array.isArray(p.contract) && p.contract.length) p.contract.shift();
+    p.years = Array.isArray(p.contract) ? p.contract.length : Math.max(0, (p.years||1)-1);
+    if(Array.isArray(p.contract) && p.contract.length){ p.salary = p.contract[0]; p.incentive = incentivesPerYear(p); }
+    // arbitration: under-control MLB players get a performance-based raise (not a flat salary)
+    const raise = applyArbitration(G, p);
+    if(raise && p.teamId===G.userTeamId){ userArbCount++; userArbTotal=round((userArbTotal+raise)*10)/10; }
+  });
+  if(userArbCount>0) logNews(G,"signing",`⚖️ Arbitration: ${userArbCount} of your players earned raises (+${money(userArbTotal)} total payroll)`, G.userTeamId);
+  const expiredLog=[];
+  Object.values(G.players).forEach(p=>{
+    if(isCollegeId(p.teamId)) return;             // amateurs don't expire to FA
+    // implicit OPT-OUT: a star on a now-below-market multi-year deal can void the rest
+    // and re-test free agency (big deals are treated as carrying an opt-out clause)
+    if(p.years>=1 && p.teamId!=null && !isAAAId(p.teamId) && p.ovr>=78 && p.age<=32 && (p.salary||0)>=8 && salaryFor(p)>p.salary*1.25 && chance(0.35)){
+      const t=teamById(G,p.teamId);
+      p.contract=[]; p.years=0;
+      logNews(G,"signing",`⚡ ${p.pos} ${p.name} (${p.ovr}) OPTED OUT of the rest of his deal with ${t?t.abbr:"his club"} — betting on a bigger payday`, t?t.id:null);
+    }
+    if(p.years<=0 && p.teamId!=null){
+      // AAA prospects stay under org control until 28 (they're cheap, haven't hit arb yet)
+      if(isAAAId(p.teamId) && p.age<28){ setContract(p, p.salary||0.7, rint(2,4), []); return; }
+      const t=teamById(G, p.teamId);
+      // Qualifying offer: a good MLB player about to walk gets a 1-year QO from his club.
+      // Accept → 1yr at the QO (stays); decline → tests FA, club gets a comp pick if he signs
+      // elsewhere (handled in onFreeAgentSigned).
+      if(t && !t.aaa && qoEligible(p)){
+        const qo=qoAmount(G,p), space=capSpaceFor(G,t.id) + (p.salary||0);
+        if(space>=qo){
+          const declineP=clamp(0.30 + (p.ovr-76)*0.05 + (30-p.age)*0.03, 0.1, 0.95);
+          if(chance(declineP)){
+            p._qoFrom=t.id;   // declines → falls through to FA (skips AI auto-resign below)
+            if(t.id===G.userTeamId) logNews(G,"signing",`You extended a QO to ${p.pos} ${p.name} (${p.ovr}); he declined to test free agency — comp pick if he signs elsewhere`, t.id);
+          } else {
+            setContract(p, qo, 1, []);
+            logNews(G,"signing",`${t.abbr} extended a 1-yr QO to ${p.pos} ${p.name} (${p.ovr}); he accepted — ${money(qo)}`, t.id);
+            return;   // stays on his club for one year
+          }
+        }
+      }
+      // AI clubs RE-SIGN their good, affordable players instead of letting them walk — the
+      // better he is the more likely, but only if it fits the budget (won't wreck the team).
+      // A QO-decliner is set on testing the market, so the AI doesn't just re-up him here.
+      if(p._qoFrom==null && t && !t.aaa && aiRunsTeam(G, t.id)){
+        const aav=requiredAAV(p,3,1);
+        const space=capSpaceFor(G,t.id) + (p.salary||0);   // his expiring money frees up
+        const keep = p.ovr>=80?0.97 : p.ovr>=74?0.82 : p.ovr>=68?0.55 : p.ovr>=62?0.22 : 0.05;
+        if(space>=aav && chance(keep)){
+          const yrs=clamp(p.age<28?rint(3,5):p.age<32?rint(2,4):rint(1,2),1,6);
+          setContract(p, round(aav*10)/10, yrs, []);
+          logNews(G,"signing",`${t.abbr} re-signed ${p.pos} ${p.name} (${p.ovr}) — ${yrs}y · ${money(aav)}/yr`, t.id);
+          return;   // stays on his club
+        }
+      }
+      if(t){ t.lineup=t.lineup.filter(x=>x!==p.id); t.rotation=t.rotation.filter(x=>x!==p.id); if(t.pos) delete t.pos[p.id]; }
+      logNews(G,"roster",`${p.name} (${p.pos}, ${p.ovr} OVR) contract expired — now a free agent`, t?t.id:null);
+      if(t && (t.id===G.userTeamId || t.id===aaaIdOf(G.userTeamId)))
+        expiredLog.push({n:p.name, ovr:p.ovr, age:p.age, pos:p.pos});
+      p.teamId=null; setContract(p, salaryFor(p), rint(1,4), []);
+      if(!G.freeAgents.includes(p.id)) G.freeAgents.push(p.id);
+    }
+  });
+  G._lastOffseasonDepartures = { retired: retiredLog, expired: expiredLog };
+  G.offStep="draft-build";
+  buildDraft(G);
+  // open the free-agent market: rival clubs bid first (and a few early signings happen
+  // before you even look — act fast or lose targets), then leave fresh offers on the board.
+  processFAWave(G, 0.10); refreshFAMarket(G);
+  processIFAWave(G, 0.08);   // a few international prospects are already off the board when you look
+}
+
+/* ------------------------- multi-season simulation -------------------------
+ * Does the AI run this club? Every AI club, always — and YOUR club too while a
+ * multi-season sim is running (`G._autoUser`), so contracts get re-signed, the
+ * roster gets filled from free agency and the org gets aligned instead of
+ * withering while you're not looking. Every "skip the user" check in the
+ * offseason/market code routes through here.
+ * ------------------------------------------------------------------------- */
+function aiRunsTeam(G, teamId){ return teamId!==G.userTeamId || !!G._autoUser; }
+
+// Draft one player: rookie deal, report to the owner's AAA affiliate, stamp draftInfo.
+function draftAssign(g, pid, ownerId){
+  const p=g.players[pid]; if(!p) return;        // draftees start in AAA
+  const pk=(g.draftPicks||[])[g.draftPick]||{};
+  p.draftInfo={ year:g.season+1, round:pk.round||0, overall:g.draftPick+1,
+                by:(g.teams[ownerId]?g.teams[ownerId].abbr:ownerId),
+                from:(p.fromHS?"HS":"College") };
+  p.amateur=false; delete p.classYr;            // turns pro on draft day
+  setContract(p, 0.7, 4, []);                   // standard rookie-scale deal
+  p.teamId=aaaIdOf(ownerId);
+}
+// Run the rest of the draft with every club (yours included) picking by aiDraftSelect.
+function autoDraftRest(G){
+  const picks=G.draftPicks||[]; let guard=0;
+  while(G.draftPick<picks.length && guard<picks.length+5){
+    const owner=picks[G.draftPick].owner;
+    const best=aiDraftSelect(G, owner); if(best==null) break;
+    const p=G.players[best];
+    if(owner===G.userTeamId && p) logNews(G,"draft",`${G.teams[owner].abbr} drafted ${p.pos} ${p.name} (POT ${p.pot}) — Rd ${picks[G.draftPick].round}, #${G.draftPick+1} (auto)`, owner);
+    draftAssign(G, best, owner);
+    G.draftClass=G.draftClass.filter(x=>x!==best); G.draftPick++; guard++;
+  }
+  G.teams.forEach(t=>trimRoster(G,t));
+  G.aaaTeams.forEach(t=>autoSetLineups(t,G.players));   // draftees joined AAA
+}
+// One line per finished season for the sim report: your club's record and finish, the
+// champion, and every award your players took home.
+const REPORT_SKIP = new Set(["All-Star","3-HR Game","4-HR Game","Cycle","No-Hitter","Perfect Game","All-Star MVP"]);
+function seasonReportRow(G){
+  const u=G.teams[G.userTeamId];
+  const lg=G.teams.filter(t=>t.league===u.league&&t.division===u.division).sort((a,b)=>b.w-a.w);
+  const champ=(G.champions||[]).find(c=>c.season===G.season);
+  const aw=[];
+  Object.values(G.players).forEach(p=>{
+    if(p.teamId!==G.userTeamId) return;
+    // season honours only — one-game feats (cycles, no-hitters, 3-HR games) are news, not awards
+    (p.accolades||[]).forEach(a=>{ if(a.season===G.season && !REPORT_SKIP.has(a.award)) aw.push(`${a.award}: ${p.name}`); });
+  });
+  const allStars=Object.values(G.players).filter(p=>p.teamId===G.userTeamId && (p.accolades||[]).some(a=>a.season===G.season&&a.award==="All-Star")).length;
+  const seeds=playoffSeeds(G.teams,u.league,rules(G).playoffTeams).map(t=>t.id);
+  return { season:G.season, w:u.w, l:u.l, place:lg.indexOf(u)+1, division:u.division,
+    made:seeds.includes(u.id), champ:!!champ && champ.id===u.id,
+    champName: champ && G.teams[champ.id] ? G.teams[champ.id].name : "—",
+    awards:aw, allStars, payroll:round(payroll(G,u.id)*10)/10 };
+}
+// From wherever you are — mid-season, playoffs or offseason — to opening day of the next
+// season, with the club running itself. Returns the report row for the season that ended
+// (or null if it stopped early, e.g. you were fired).
+function simToNextSeason(G){
+  const wasAuto=G._autoUser; G._autoUser=true;
+  let row=null, guard=0;
+  try{
+    while(G.phase==="regular" && guard++<500){
+      simDay(G);
+      if(G.presser) answerPresser(G, 1);            // the middle answer: no big swing either way
+      (G.tradeOffers||[]).length=0;                  // you're not at the desk to take calls
+    }
+    while(G.phase==="playoffs" && guard++<900){
+      const po=G.playoffs, act=activeSeriesList(po), bestOf=seriesLenFor(G, po.round);
+      if(act.some(s=>!s.done)) act.forEach(s=>{ if(!s.done) playoffSeriesGame(G,s,bestOf); });
+      else buildNextRound(G);
+    }
+    if(G.gmFired) return null;
+    if(G.phase==="offseason"){
+      row=seasonReportRow(G);
+      if(!G.offStep || G.offStep==="intro") processOffseason(G);
+      autoDraftRest(G);
+      startNewSeason(G);
+      ensureLineup(G.teams[G.userTeamId], G.players);
+      autoSetLineups(G.teams[G.userTeamId], G.players);
+    }
+  } finally { G._autoUser=wasAuto; }
+  return row;
+}
+
 function OffseasonHub({G, commit, tShow, setTab}){
   const champ = G.champion? G.teams[G.champion.id]:null;
   const step = G.offStep||"intro";
 
   const doProgression = ()=>{
-    const warCtx = leagueWarCtx(G);   // league avg wOBA/FIP for the season that just ended (before any reset)
-    Object.values(G.players).forEach(p=>{
-      recordSeasonHistory(p, G.season);   // log the year that just ended (team[s], stats) before aging
-      // stamp WAR onto this season's MLB history row(s) using that season's league context
-      p.history.filter(h=>h.season===G.season && h.level==="MLB").forEach(h=>{ h.war = +warOf(p, warCtx, h.stats).toFixed(1); });
-      const before = p.ovr;
-      p.age++;
-      // Directed development: young players climb toward their potential; prospects in
-      // AAA grow faster; performers (esp. promoted early) keep climbing; older players decline.
-      const gap = p.pot - p.ovr;            // remaining room to ceiling
-      const perf = seasonPerf(p);           // how he played this year
-      let center;
-      if(p.age<=23)      center = 1.5 + gap*0.16;            // fast risers
-      else if(p.age<=26) center = 0.6 + gap*0.11;
-      else if(p.age<=28) center = 0.05 + gap*0.05;           // last bit of growth, then peak
-      else if(p.age<=30) center = -0.5;                      // gentle decline begins
-      else if(p.age<=33) center = -1.1 - (p.age-30)*0.25;
-      else               center = -2.2 - (p.age-33)*0.4;     // age cliff
-      if((isAAAId(p.teamId)||isCollegeId(p.teamId)) && p.age<=25) center += 1.2;   // minors/college development boost
-      // performance: young producers develop faster, vets who rake age gracefully, busts stall
-      if(p.age<=27) center += perf.score * perf.weight * 1.6;
-      else          center += perf.score * perf.weight * 0.7;
-      center = clamp(center*0.6, -3.5, 3.0);   // reduced — most development now happens IN-SEASON (inSeasonDev)
-      const each = r=>{ if(p[r]!==undefined) p[r]=clamp(round(p[r]+gauss(center,1.2)),20,99); };
-      (p.isP?["stu","ctl","stm"]:["con","pow","eye","spd","def"]).forEach(each);
-      computeOvr(p);
-      if(p.ovr > (p.peakOvr||0)) p.peakOvr = p.ovr;   // remember career-best OVR (for HoF)
-      // a young breakout can raise his ceiling; everyone's ceiling erodes once past their prime
-      if(p.age<=25 && (p.ovr>p.pot || (perf.score>0.7 && chance(0.5))))
-        p.pot = clamp(Math.max(p.ovr, p.pot+rint(0,3)), p.ovr, 99);
-      else if(p.age>=29) p.pot = Math.max(p.ovr, p.pot-1);
-      p._lastDelta = p.ovr - before;        // for the offseason development report
-      // reset season stats -> career. Amateur (college) stats live ONLY in history rows,
-      // never in the pro career line, so a draftee's pro totals start clean.
-      if(isCollegeId(p.teamId)) p.stats = p.isP?emptyPitStats():emptyHitStats();
-      else mergeCareer(p);
-      // a signed contract is fixed by its schedule — don't re-price it here
-    });
-    // retirements: driven by BOTH age and quality. Good players hang on (a 35+ vet who's
-    // still ~62 OVR keeps grinding); washed-up players quit much earlier the older they get.
-    // A stable per-player longevity factor adds variety so careers don't all end at once.
-    const retired=[];
-    Object.values(G.players).forEach(p=>{
-      let retP;
-      if(p.age<32) retP = 0;          // nobody retires young — careers end from age & decline only
-      else {
-        retP = (p.age-31)*0.06;                 // age ramp: 32→.06, 35→.24, 39→.48, 42→.66
-        retP -= ((p.ovr-60)/100)*1.4;           // quality: stars (>60) hang on, scrubs (<60) leave sooner
-        if(p.ovr<55) retP += (p.age-33)*0.05;   // genuinely bad + getting old → push them out
-      }
-      const lng = 0.78 + ((p.id*2654435761>>>0)%1000)/2273;   // ~0.78–1.22, stable per player
-      retP = clamp(retP*lng, 0, 0.95);
-      if(p.age>=44) retP = Math.max(retP, 0.9);                // almost nobody plays past 44
-      if(chance(retP)){ retired.push(p.id); }
-    });
-    const retiredLog=[];
-    retired.forEach(id=>{
-      const p=G.players[id]; const t=teamById(G, p.teamId);
-      nominateForHOF(G, p);                  // worthy careers go on the Hall of Fame ballot
-      if(t){ t.lineup=t.lineup.filter(x=>x!==id); t.rotation=t.rotation.filter(x=>x!==id); if(t.pos) delete t.pos[id]; }
-      G.freeAgents=G.freeAgents.filter(x=>x!==id);
-      const tName=t?(t.aaa?G.teams[parentIdOf(t.id)].abbr:t.abbr):"FA";
-      logNews(G,"roster",`${p.name} (${p.pos}, ${p.ovr} OVR, age ${p.age}) retired`, t?t.id:null);
-      if(t && (t.id===G.userTeamId || t.id===aaaIdOf(G.userTeamId)))
-        retiredLog.push({n:p.name, ovr:p.ovr, age:p.age, pos:p.pos});
-      delete G.players[id];
-    });
-    runHofVote(G);                           // hold the Hall of Fame vote (new nominees + lingering ballot)
-    // advance each rostered contract one year (drop the season just played), then expire to FA.
-    // Free agents keep their ask intact — their "contract" is a demand, not a deal in progress.
-    let userArbCount=0, userArbTotal=0;
-    Object.values(G.players).forEach(p=>{
-      if(isCollegeId(p.teamId)) return;             // amateurs: no pro contract to advance
-      if(p.teamId==null){ ensureContract(p); return; }
-      if(Array.isArray(p.contract) && p.contract.length) p.contract.shift();
-      p.years = Array.isArray(p.contract) ? p.contract.length : Math.max(0, (p.years||1)-1);
-      if(Array.isArray(p.contract) && p.contract.length){ p.salary = p.contract[0]; p.incentive = incentivesPerYear(p); }
-      // arbitration: under-control MLB players get a performance-based raise (not a flat salary)
-      const raise = applyArbitration(G, p);
-      if(raise && p.teamId===G.userTeamId){ userArbCount++; userArbTotal=round((userArbTotal+raise)*10)/10; }
-    });
-    if(userArbCount>0) logNews(G,"signing",`⚖️ Arbitration: ${userArbCount} of your players earned raises (+${money(userArbTotal)} total payroll)`, G.userTeamId);
-    const expiredLog=[];
-    Object.values(G.players).forEach(p=>{
-      if(isCollegeId(p.teamId)) return;             // amateurs don't expire to FA
-      // implicit OPT-OUT: a star on a now-below-market multi-year deal can void the rest
-      // and re-test free agency (big deals are treated as carrying an opt-out clause)
-      if(p.years>=1 && p.teamId!=null && !isAAAId(p.teamId) && p.ovr>=78 && p.age<=32 && (p.salary||0)>=8 && salaryFor(p)>p.salary*1.25 && chance(0.35)){
-        const t=teamById(G,p.teamId);
-        p.contract=[]; p.years=0;
-        logNews(G,"signing",`⚡ ${p.pos} ${p.name} (${p.ovr}) OPTED OUT of the rest of his deal with ${t?t.abbr:"his club"} — betting on a bigger payday`, t?t.id:null);
-      }
-      if(p.years<=0 && p.teamId!=null){
-        // AAA prospects stay under org control until 28 (they're cheap, haven't hit arb yet)
-        if(isAAAId(p.teamId) && p.age<28){ setContract(p, p.salary||0.7, rint(2,4), []); return; }
-        const t=teamById(G, p.teamId);
-        // Qualifying offer: a good MLB player about to walk gets a 1-year QO from his club.
-        // Accept → 1yr at the QO (stays); decline → tests FA, club gets a comp pick if he signs
-        // elsewhere (handled in onFreeAgentSigned).
-        if(t && !t.aaa && qoEligible(p)){
-          const qo=qoAmount(G,p), space=capSpaceFor(G,t.id) + (p.salary||0);
-          if(space>=qo){
-            const declineP=clamp(0.30 + (p.ovr-76)*0.05 + (30-p.age)*0.03, 0.1, 0.95);
-            if(chance(declineP)){
-              p._qoFrom=t.id;   // declines → falls through to FA (skips AI auto-resign below)
-              if(t.id===G.userTeamId) logNews(G,"signing",`You extended a QO to ${p.pos} ${p.name} (${p.ovr}); he declined to test free agency — comp pick if he signs elsewhere`, t.id);
-            } else {
-              setContract(p, qo, 1, []);
-              logNews(G,"signing",`${t.abbr} extended a 1-yr QO to ${p.pos} ${p.name} (${p.ovr}); he accepted — ${money(qo)}`, t.id);
-              return;   // stays on his club for one year
-            }
-          }
-        }
-        // AI clubs RE-SIGN their good, affordable players instead of letting them walk — the
-        // better he is the more likely, but only if it fits the budget (won't wreck the team).
-        // A QO-decliner is set on testing the market, so the AI doesn't just re-up him here.
-        if(p._qoFrom==null && t && !t.aaa && t.id!==G.userTeamId){
-          const aav=requiredAAV(p,3,1);
-          const space=capSpaceFor(G,t.id) + (p.salary||0);   // his expiring money frees up
-          const keep = p.ovr>=80?0.97 : p.ovr>=74?0.82 : p.ovr>=68?0.55 : p.ovr>=62?0.22 : 0.05;
-          if(space>=aav && chance(keep)){
-            const yrs=clamp(p.age<28?rint(3,5):p.age<32?rint(2,4):rint(1,2),1,6);
-            setContract(p, round(aav*10)/10, yrs, []);
-            logNews(G,"signing",`${t.abbr} re-signed ${p.pos} ${p.name} (${p.ovr}) — ${yrs}y · ${money(aav)}/yr`, t.id);
-            return;   // stays on his club
-          }
-        }
-        if(t){ t.lineup=t.lineup.filter(x=>x!==p.id); t.rotation=t.rotation.filter(x=>x!==p.id); if(t.pos) delete t.pos[p.id]; }
-        logNews(G,"roster",`${p.name} (${p.pos}, ${p.ovr} OVR) contract expired — now a free agent`, t?t.id:null);
-        if(t && (t.id===G.userTeamId || t.id===aaaIdOf(G.userTeamId)))
-          expiredLog.push({n:p.name, ovr:p.ovr, age:p.age, pos:p.pos});
-        p.teamId=null; setContract(p, salaryFor(p), rint(1,4), []);
-        if(!G.freeAgents.includes(p.id)) G.freeAgents.push(p.id);
-      }
-    });
-    G._lastOffseasonDepartures = { retired: retiredLog, expired: expiredLog };
-    G.offStep="draft-build";
-    buildDraft(G);
-    // open the free-agent market: rival clubs bid first (and a few early signings happen
-    // before you even look — act fast or lose targets), then leave fresh offers on the board.
-    processFAWave(G, 0.10); refreshFAMarket(G);
-    processIFAWave(G, 0.08);   // a few international prospects are already off the board when you look
+    processOffseason(G);
     commit(G);
     tShow("Players aged & contracts processed");
   };
@@ -7595,6 +7774,7 @@ function OffseasonHub({G, commit, tShow, setTab}){
             <li>Start the new season</li>
           </ol>
           <button onClick={doProgression} className="px-4 py-2 bg-emerald-500 text-slate-900 rounded-lg font-semibold">Process Offseason →</button>
+          <SimAhead G={G} commit={commit} tShow={tShow} />
         </Card>
       </div>
     );
@@ -7646,6 +7826,7 @@ function OffseasonHub({G, commit, tShow, setTab}){
           <button onClick={()=>{ startNewSeason(G); commit(G); tShow("Play ball! New season started."); setTab("hub"); }}
             className="px-4 py-2 bg-emerald-500 text-slate-900 rounded-lg font-semibold">Start {G.season+1} Season →</button>
         </div>
+        <SimAhead G={G} commit={commit} tShow={tShow} />
       </Card>
     </div>
   );
@@ -7829,7 +8010,7 @@ function evalOwnerMandate(G){
   const m=G.ownerMandate; if(!m || m.season!==G.season) return;
   const u=G.teams[G.userTeamId];
   const wp=(u.w+u.l)? u.w/(u.w+u.l) : 0;
-  const seeds=playoffSeeds(G.teams, u.league).map(t=>t.id);
+  const seeds=playoffSeeds(G.teams, u.league, rules(G).playoffTeams).map(t=>t.id);
   const madePlayoffs=seeds.includes(u.id);
   const divWinner=seeds.slice(0,3).includes(u.id);
   let met=false, badly=false;
@@ -7838,7 +8019,11 @@ function evalOwnerMandate(G){
   else if(m.goal==="playoffs"){ met=madePlayoffs; badly=!madePlayoffs && wp<0.460+ma; }
   else if(m.goal==="win500"){ met=wp>=0.500; badly=wp<0.450+ma; }
   else { met=wp>=0.450; badly=wp<0.385+ma; }                    // develop: only a collapse is "bad"
-  G.gmStrikes = badly ? (G.gmStrikes||0)+1 : 0;
+  // While a multi-season sim runs the club for you, the owner judges the AI's work, not
+  // yours — so by default a bad year doesn't cost a strike (Settings → "Job risk in long
+  // sims" turns the hot seat back on for anyone who wants the full consequence).
+  const sabbatical = G._autoUser && !(G.settings && G.settings.simJobRisk);
+  G.gmStrikes = badly ? (sabbatical ? (G.gmStrikes||0) : (G.gmStrikes||0)+1) : 0;
   Object.assign(m, { met, badly, finalWp:+wp.toFixed(3), madePlayoffs, divWinner, strikes:G.gmStrikes });
   if(met) logNews(G,"award",`🏟️ Owner: mandate met — "${m.label}". The front office is pleased.`, u.id);
   else if(badly) logNews(G,"award",`🏟️ Owner: mandate missed badly — "${m.label}". The hot seat warms (${G.gmStrikes}/3).`, u.id);
@@ -7861,13 +8046,17 @@ function offerFit(p, offer, sit){
 // their offers. Stores p.offers (top few) + p.bestOffer for the FA tab + decision logic.
 function refreshFAMarket(G){
   const sits={}; G.teams.forEach(t=>{ sits[t.id]=teamSituation(G,t.id); });
+  // Cap space doesn't move while offers are written, so compute it once per club rather than
+  // once per club PER free agent — each call scans the whole player dict, and at a few hundred
+  // FAs that was ~40M player visits per refresh (the reason seasons got slower every year).
+  const spaceOf={}; G.teams.forEach(t=>{ spaceOf[t.id]=capSpaceFor(G,t.id); });
   (G.freeAgents||[]).forEach(id=>{
     const p=G.players[id]; if(!p) return;
     const ask=requiredAAV(p, 3, 1);
     const offers=[];
     G.teams.forEach(t=>{
-      if(t.id===G.userTeamId) return;
-      const space=capSpaceFor(G,t.id);
+      if(!aiRunsTeam(G, t.id)) return;
+      const space=spaceOf[t.id];
       if(space < Math.max(0.6, ask*0.8)) return;            // can't afford → no offer
       const sit=sits[t.id]; const posKey=p.isP?p.role:p.pos;
       const needed = sit.needs.includes(posKey) || (!p.isP && sit.needs.includes(p.pos));
@@ -7900,7 +8089,7 @@ function processFAWave(G, intensity){
     logNews(G,"signing",`${t.abbr} signed ${p.pos} ${p.name} (${p.ovr}) — ${off.years}y · ${money(off.aav)}/yr`, t.id);
     signed++;
   });
-  G.teams.forEach(t=>{ if(t.id!==G.userTeamId) aiAlignOrg(G,t.id); });
+  G.teams.forEach(t=>{ if(aiRunsTeam(G, t.id)) aiAlignOrg(G,t.id); });
   return signed;
 }
 // Score a prospect for a specific club: base talent, weighted by positional need and the
@@ -8102,7 +8291,7 @@ function ifaInterest(G, p){ let n=0;
 function processIFAWave(G, intensity){
   let signed=0;
   G.teams.forEach(t=>{
-    if(t.id===G.userTeamId || !chance(intensity)) return;
+    if(!aiRunsTeam(G, t.id) || !chance(intensity)) return;
     const avail=(G.ifaClass||[]).map(id=>G.players[id]).filter(p=>p&&p.ifaBonus<=(t.ifaPool||0));
     if(!avail.length) return;
     const tgt=avail.sort((a,b)=>ifaScore(G,t,b)-ifaScore(G,t,a))[0];
@@ -8114,7 +8303,7 @@ function processIFAWave(G, intensity){
 // Final mop-up at the rollover: AI clubs spend whatever's left of their pools.
 function aiSignIFAs(G){
   G.teams.forEach(t=>{
-    if(t.id===G.userTeamId) return;
+    if(!aiRunsTeam(G, t.id)) return;
     let avail=(G.ifaClass||[]).map(id=>G.players[id]).filter(Boolean).sort((a,b)=>ifaScore(G,t,b)-ifaScore(G,t,a));
     let guard=0;
     while((t.ifaPool||0)>=0.3 && guard++<40){
@@ -8152,14 +8341,7 @@ function Draft({G, commit, tShow, setTab}){
   const avail = G.draftClass.map(id=>G.players[id]).filter(Boolean);
   const pickInRound = picksArr.slice(0,G.draftPick).filter(p=>p.round===round).length+1;
 
-  const assign=(g,pid,ownerId)=>{ const p=g.players[pid]; if(!p) return;        // draftees start in AAA
-    const pk=(g.draftPicks||[])[g.draftPick]||{};
-    p.draftInfo={ year:g.season+1, round:pk.round||0, overall:g.draftPick+1,
-                  by:(g.teams[ownerId]?g.teams[ownerId].abbr:ownerId),
-                  from:(p.fromHS?"HS":"College") };
-    p.amateur=false; delete p.classYr;            // turns pro on draft day
-    setContract(p, 0.7, 4, []);                   // standard rookie-scale deal
-    p.teamId=aaaIdOf(ownerId); };
+  const assign=draftAssign;
   const draftPlayer=(pid)=>{
     if(!G.players[pid]) return;
     const p=G.players[pid];
@@ -8178,17 +8360,7 @@ function Draft({G, commit, tShow, setTab}){
     }
     commit(g);
   };
-  const simAll=()=>{
-    const g=G; let guard=0;
-    while(g.draftPick<totalPicks && guard<totalPicks+5){
-      const best=aiDraftSelect(g, picksArr[g.draftPick].owner); if(best==null) break;
-      assign(g,best,picksArr[g.draftPick].owner);
-      g.draftClass=g.draftClass.filter(x=>x!==best); g.draftPick++; guard++;
-    }
-    g.teams.forEach(t=>trimRoster(g,t));
-    g.aaaTeams.forEach(t=>autoSetLineups(t,g.players)); // draftees joined AAA
-    commit(g); tShow("Draft complete");
-  };
+  const simAll=()=>{ autoDraftRest(G); commit(G); tShow("Draft complete"); };
 
   const myUpcoming = picksArr.filter((pk,i)=>i>=G.draftPick && pk.owner===G.userTeamId).length;
 
@@ -8494,7 +8666,7 @@ function startNewSeason(G){
   // (anyone the user didn't sign). Then a fallback fill guarantees playable AI rosters.
   for(let w=0; w<6; w++) processFAWave(G, 0.55);
   G.teams.forEach(t=>{
-    if(t.id===G.userTeamId) return;
+    if(!aiRunsTeam(G, t.id)) return;
     let ros=rosterOf(G,t.id);
     let guard=0;
     while(ros.length<26 && G.freeAgents.length && guard<80){

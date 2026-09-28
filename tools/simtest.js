@@ -29,6 +29,7 @@ const EXPORTS = [
   "payroll", "capSpaceFor", "ROSTER_CAP", "rosterOf",
   "startFantasyDraft", "fantasyOnClock", "fantasyAIPick", "fantasyPick", "DIFFICULTIES",
   "personalityOf", "answerPresser", "pickPresser", "PERSONALITIES",
+  "processOffseason", "autoDraftRest", "simToNextSeason", "aiRunsTeam", "startNewSeason",
 ];
 
 /* ------------------------------- load the app ---------------------------- */
@@ -330,6 +331,42 @@ const CHECKS = {
   },
 
   // A rule change staged mid-season must apply at the rollover, not before.
+  // Multi-season sim: the offseason and draft as engine calls, with YOUR club run by the
+  // AI for the duration. This is also the harness's only coverage of the offseason.
+  multiSeason(A) {
+    section("Multi-season sim (offseason + draft + your club auto-managed)");
+    const G = A.newGame(0, { seed: 31, rules: { seasonLen: 54 } });
+    const s0 = G.season;
+    const rows = [];
+    for (let y = 0; y < 4; y++) {
+      const r = A.simToNextSeason(G);
+      if (!r) break;
+      rows.push(r);
+      ok(G.phase === "regular" && G.day === 0, `season ${r.season} rolled over to opening day (${r.w}-${r.l}, ${r.made ? "playoffs" : "no playoffs"})`);
+      const wins = G.teams.reduce((s, t) => s + t.w, 0);
+      ok(wins === 0, "  the new season's records start at zero");
+      const me = A.rosterOf(G, G.userTeamId);
+      ok(me.length >= 24 && me.length <= A.rules(G).rosterCap, `  your club is still a real roster (${me.length} players)`);
+      const u = G.teams[G.userTeamId];
+      ok((u.rotation || []).length >= 5 && (u.lineup || []).length >= 9, `  and can field a lineup + 5-man rotation (${(u.lineup||[]).length}/${(u.rotation||[]).length})`);
+    }
+    if (G.gmFired) { ok(true, `(fired after ${rows.length} seasons — the sim stopped, as it should)`); return; }
+    ok(rows.length === 4 && G.season === s0 + 4, `four full seasons simmed (${s0} → ${G.season})`);
+    ok(rows.every(r => r.w + r.l === 54), "each report row is a complete season");
+    ok(rows.every(r => r.champName && r.champName !== "—"), "every season crowned a champion");
+    const drafted = Object.values(G.players).filter(p => p.draftInfo && p.draftInfo.year > s0);
+    ok(drafted.length >= 100, `drafts happened (${drafted.length} draftees in the league)`);
+    ok(drafted.some(p => p.draftInfo.by === G.teams[G.userTeamId].abbr), "including picks made for your club");
+    ok(!G._autoUser, "auto-management switches off again afterwards");
+    ok(Object.keys(G.players).length < 4200, `the player pool stays bounded (${Object.keys(G.players).length})`);
+    let json = null; try { json = JSON.stringify(G); } catch (e) {}
+    ok(!!json, `the save still serializes (${json ? (json.length / 1048576).toFixed(1) + "MB" : "threw"})`);
+    // A new season plays on cleanly after the sims.
+    simRegularSeason(A, G);
+    const w = G.teams.reduce((s, t) => s + t.w, 0), l = G.teams.reduce((s, t) => s + t.l, 0);
+    ok(w === l && w > 0, `and the next season plays out balanced (${w}-${l})`);
+  },
+
   pendingRules(A) {
     section("Structural rules stage until the rollover");
     const G = A.newGame(0, { seed: 21, rules: { seasonLen: 162 } });
