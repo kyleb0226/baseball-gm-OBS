@@ -4,11 +4,55 @@ Single-file baseball **GM simulation** game (inspired by the iOS *Pocket GM Foot
 You run the front office of a fictional 30-team baseball league: roster, lineup/rotation, season
 sim, trades, free agency, amateur draft, contracts/budget, playoffs, and a multi-season franchise loop.
 
+## The Pocket GM family (shared section — keep identical in all three games)
+Three sibling games built the same way, deployed together by `~/pocket-gm-hub` (Vercel; `/baseball/`,
+`/soccer/`, `/hockey/`). When a feature lands in one, check whether it belongs in the other two — written
+for that sport, not translated knob-for-knob.
+
+| | Baseball | Soccer | Hockey |
+| --- | --- | --- | --- |
+| Repo / local | `baseball-gm` · `~/baseball-gm` | `soccer-gm` · `~/soccer-gm` | `hockey-gm` · `~/hockey-gm` |
+| Dev port | 8124 | 8126 | 8142 |
+| Saves | `pocketgm_slot_*` (LZ-compressed) | `pgsoccer_slot_*` + IndexedDB `pgsoccer_db` | `pgmh:*` + IndexedDB `pgmh` |
+| News wire | `logNews(G,type,msg,teamId)` | `logNews(G,type,msg,teamId)` | `news(G,text,kind)` |
+| RNG | `_rng` (seeded for the league build only) | `_rng` | `rnd(G)`, seeded — **never `Math.random`** |
+| Harness | `node tools/simtest.js` | `node tools/simtest.js` | `node tools/simtest.js` (+ daily autopilot) |
+
+**Shared conventions**
+- One static `index.html`; the app is a `<script type="text/babel-src" id="app-src">` block transpiled at load
+  with Babel's **classic** JSX runtime. React/Babel/Tailwind are **vendored** in `vendor/` — no CDN, works offline.
+- One `G` state object; shape changes go in `migrate(G)` — never bump the save key.
+- Commissioner knobs go through `rules(G)` / `setRule` / `ruleValue`; structural ones are staged in
+  `G.pendingRules` and promoted by `applyPendingRules` at the rollover. Difficulty via `diff(G)`.
+- Flavour is **derived, not stored** where possible (`personalityOf(p)` from the id), so old saves get it free.
+- Every page has the same `<head>`: manifest, icons, `apple-mobile-web-app-*` tags and `env(safe-area-inset-*)`
+  body padding (standalone iOS draws under the notch otherwise). `sw.js` uses **relative** paths so it works at
+  a domain root, a GitHub Pages subpath or a hub subpath.
+- The mount is wrapped in an `ErrorBoundary` (reload / copy error) so a render crash can't blank the page.
+- **The harnesses never render.** Any UI change needs a browser pass — load `index.html?v=N` with a fresh `N`
+  (the service worker can hand back a stale bundle). Add a `CHECKS` case (and `EXPORTS` entry) for every feature.
+
+**Feature parity** (✓ = has it; name = where it lives)
+| Feature | Baseball | Soccer | Hockey |
+| --- | --- | --- | --- |
+| Rules / difficulty / command palette (⌘K) | ✓ | ✓ | ✓ |
+| Personalities + press conferences | ✓ | ✓ | ✓ (`pressers` rule) |
+| Player / Pitcher / Stars of the Month | `tickMonthly` | `tickSoccerMonth` | `tickMonth` (three stars) |
+| Trade / transfer rumour mill | `tickTradeRumors` | `tickTransferRumours` | `tickRumours` |
+| Offseason shocks (black swans) | in `startNewSeason` | `rollSeasonEvents` | `rollShocks` (`shocks` rule) |
+| Individual streaks | hit streaks | scoring runs (`p.gStreak`) | point streaks |
+| Player compare | Players tab | Players tab (`CompareCard`) | `CompareModal` |
+| Sim to the deadline | Hub "Sim to Deadline" | Hub "Skip 7 weeks" | header "To deadline" |
+| One-press full-year / multi-season sim | — (offseason lives in `OffseasonHub`) | ✓ (auto-manage) | `simFullYear` (`autoManage`) |
+| HoF with voting ballot | ✓ | inducted on retirement | inducted after `HOF_WAIT` |
+| Draft | ✓ (+ college, HS, IFA) | — (youth academy) | ✓ |
+
 ## Run it
 - It's a single static file: `index.html`. Open it directly in a browser, or serve the folder:
   `python3 -m http.server 8124 --directory ~/baseball-gm` → http://localhost:8124
 - Registered in `~/.claude/launch.json` as **baseball-gm** (port 8124) for the preview tooling.
-- No build step. React 18 + Babel-standalone + Tailwind, all via CDN.
+- No build step. React 18 + Babel-standalone + Tailwind, all **vendored** under `vendor/` (works offline;
+  no CDN).
 
 ## Architecture (all in `index.html`)
 - **Bootstrap:** the app code lives in a `<script type="text/babel-src" id="app-src">` block. A small
@@ -67,12 +111,14 @@ sim, trades, free agency, amateur draft, contracts/budget, playoffs, and a multi
   game start (`snapH`/`snapP` → `gSnap`) and per-half-inning runs (`lineScore`), then diffs them into a
   **compact** `out.box` (player **ids + ints**, names resolved at view time): `ls` (per-inning runs, `null`
   = didn't bat → "X"), `hb`/`ab` batting `[pid,AB,R,H,RBI,BB,SO,HR]`, `hp`/`ap` pitching
-  `[pid,OUT,H,R,ER,BB,SO,HRA]` (R==ER — sim treats all runs earned), and `dec` (`{w,l,s}` ids, returned
+  `[pid,OUT,H,R,ER,BB,SO,HRA]` (R and ER are distinct — see *Earned vs unearned runs*), and `dec` (`{w,l,s}` ids, returned
   by `awardDecision`). `simDay` stores it on **every MLB** schedule game (`g.box`, MLB only — not AAA);
   `seriesGame` stores it on each playoff `s.games[]` entry. The `BoxScore` modal (line score grid +
   batting/pitching tables, W/L/S tags) opens by **clicking a played game** in the **Schedule** tab (▦) or a
   **line-score chip in Playoffs**. Storage stays bounded: the schedule is rebuilt each `startNewSeason`, so
   only the **current** season's + current postseason's box scores persist (~1.3MB compressed/season, well
+  under quota). Final scores/records/history are unaffected and persist forever.
+- **AAA & college postseasons & records** (moved here from under *Box scores*, where they had been nested):
   - **AAA & college postseasons (`runAutoPlayoffs`/`simSeriesAuto`):** at `enterPlayoffs` (after the MLB
     bracket is set up) both secondary leagues run a **full MLB-style bracket** (WC play-in → DS → CS →
     cross-conference final), **auto-simmed to completion** — AAA uses MLB lengths (Bo5/Bo7), college is
@@ -89,7 +135,6 @@ sim, trades, free agency, amateur draft, contracts/budget, playoffs, and a multi
     (Standings / Leaders / Prospects / Playoffs / Records); the **Records** sub-tab is each league's own
     "Hall of Fame" via `MinorRecords` (champions roll + season bests + career bests). Standings team names open
     the shared `TeamRosterModal` (works for any league; subtitle handles AAA/college — no payroll for amateurs).
-  under quota). Final scores/records/history are unaffected and persist forever.
 - **Rotation & bullpen:** every team carries a **5-man rotation** (`autoSetLineups` promotes the best
   arms if short of true SPs) and each starter goes every 5th game (≈32–33 GS). The bullpen has a
   user-editable **priority order** (`team.bullpen`, resolved live by `bullpenOrder()`; `pen[0]` = closer).
@@ -260,9 +305,10 @@ sim, trades, free agency, amateur draft, contracts/budget, playoffs, and a multi
   of the 6 rounds a target day (`roundDays`, fractions of `schedule.length`: R64→R32→R16→QF→SF→Final).
   `simDay` calls `ensureSeasonCup` + `tickBACup` (plays any round whose day has arrived, catching up if
   several are overdue); `startNewSeason` starts a fresh bracket each year; `enterPlayoffs` calls
-  `finishBACup` as a safety so the Cup always crowns before the season closes. Games are scored by a
-  lightweight ace-weighted strength model (`cupGame`/`cupPower`) so **cup play never touches league
-  stats/records** (career BA Cup stats may come later). State on `G.baCup = {season, roundIdx, matches,
+  `finishBACup` as a safety so the Cup always crowns before the season closes. Games now run the **full
+  sim** (`cupGameSim`, which replaced the old strength-only `cupGame`/`cupPower`), with each game's stats
+  banked into `p.cupStats` so **cup play never touches regular-season stats/records** (see *Postseason &
+  BA Cup stats are separate*). State on `G.baCup = {season, roundIdx, matches,
   past[], champion, roundDays}`; winners roll into `G.baCupChampions`. The **BA Cup** tab is informational
   (auto-inits via `useEffect`): current/upcoming round, your club's matchup or knockout round, past rounds,
   past winners. NOTE: champion is a team id (0..59) — all "has a champion" checks use `!= null` (id 0 is falsy).
@@ -616,3 +662,19 @@ sim, trades, free agency, amateur draft, contracts/budget, playoffs, and a multi
   full simulated seasons: season lengths, W/L balance, DH, pace rules, every playoff field size,
   **save serializability**, fantasy draft, difficulty, pressers, rule staging. `node tools/simtest.js`
   for all, or pass a check name. Add a case to `CHECKS` when you add a rule.
+
+## Cross-game parity pass (2026-09)
+- **Sim to Deadline** (Hub sim bar, shown while `G.day < G.tradeDeadline` and `tradeDeadlineOn`): runs
+  `runDays(G.tradeDeadline - G.day)` so you stop on the last day trades are open. Hockey gained the same
+  ("To deadline").
+- **PWA head matches the siblings:** `viewport-fit=cover`, `apple-mobile-web-app-*` + `mobile-web-app-capable`
+  tags, an icon link, and `env(safe-area-inset-*)` body padding. The hub's `patchBaseball` used to inject
+  the Apple tags at build time; it's now a no-op (kept as a guard).
+- **The iOS wrapper** (`PocketGM-Baseball-iOS`) is optional now that the hub serves an installable,
+  offline-capable PWA. Its `sync-game.py` was broken (it looked for the old CDN `<head>`); it now copies
+  `index.html` + `vendor/` straight across.
+- **Known gap vs. the siblings:** no one-press "sim a full year / N years". The offseason processing lives
+  inside the `OffseasonHub` component (`doProgression` closure) rather than an engine function, and the
+  harness has no offseason coverage. Lifting it to `processOffseason(G)` + an engine auto-draft is the
+  prerequisite — do that (with a harness check) before adding the button.
+

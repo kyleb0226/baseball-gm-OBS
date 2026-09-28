@@ -2,17 +2,26 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Pocket GM — Baseball</title>
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="icon" href="icon-192.png" />
 <meta name="theme-color" content="#0b1220" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Baseball GM" />
 <script src="vendor/react.production.min.js"></script>
 <script src="vendor/react-dom.production.min.js"></script>
 <script src="vendor/babel.min.js"></script>
 <script src="vendor/tailwind.js"></script>
 <style>
-  body { background:#0b1220; color:#e5e7eb; }
+  html { background:#0b1220; }
+  body { background:#0b1220; color:#e5e7eb; -webkit-text-size-adjust:100%; }
+  /* Installed to the home screen, iOS draws under the notch and the home indicator. */
+  body { padding: env(safe-area-inset-top) env(safe-area-inset-right)
+                 env(safe-area-inset-bottom) env(safe-area-inset-left); }
   ::-webkit-scrollbar{width:10px;height:10px}
   ::-webkit-scrollbar-thumb{background:#27324a;border-radius:6px}
   ::-webkit-scrollbar-track{background:#0b1220}
@@ -3814,6 +3823,10 @@ function Hub({G, commit, tShow, setTab}){
           <button disabled={busy} onClick={()=>runDays(1)} className="px-4 py-2 bg-emerald-500 text-slate-900 rounded-lg font-semibold disabled:opacity-50">Sim 1 Day</button>
           <button disabled={busy} onClick={()=>runDays(7)} className="px-4 py-2 bg-[#16213a] rounded-lg hover:bg-[#1c2c4a] disabled:opacity-50">Sim 1 Week</button>
           <button disabled={busy} onClick={()=>runDays(30)} className="px-4 py-2 bg-[#16213a] rounded-lg hover:bg-[#1c2c4a] disabled:opacity-50">Sim 1 Month</button>
+          {/* jump straight to the next moment that asks something of the GM */}
+          {rules(G).tradeDeadlineOn && G.tradeDeadline!=null && G.day<G.tradeDeadline && (
+            <button disabled={busy} onClick={()=>runDays(G.tradeDeadline-G.day)} className="px-4 py-2 bg-[#16213a] rounded-lg hover:bg-[#1c2c4a] disabled:opacity-50" title="Stop on the last day trades are open">Sim to Deadline</button>
+          )}
           <button disabled={busy} onClick={()=>runDays(400)} className="px-4 py-2 bg-[#16213a] rounded-lg hover:bg-[#1c2c4a] disabled:opacity-50">Sim to Playoffs</button>
         </div>
         {busy && <div className="text-xs text-slate-400 mt-2">Simulating…</div>}
