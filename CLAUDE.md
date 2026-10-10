@@ -1,3 +1,5 @@
+> **⚠️ Obsolete — moved.** This game now lives in [`pocket-gm-hub/baseball/`](https://github.com/kyleb0226/pocket-gm-hub/tree/main/baseball), with this repo's full history, as part of the single Pocket GM app. Don't edit here.
+
 # Pocket GM — Baseball
 
 Single-file baseball **GM simulation** game (inspired by the iOS *Pocket GM Football/Basketball* apps).
