@@ -1,4 +1,7 @@
-const CACHE = 'baseball-gm-v1';
+const CACHE = 'baseball-gm-v2';
+// The three games and the menu share ONE origin on the hub, so they share CacheStorage.
+// Activation clears only OUR old versions ("baseball-gm-*"); deleting every other cache wiped
+// the sibling games' offline copies each time any one of them updated.
 // Relative paths so the same worker runs on localhost:8124 and GitHub Pages.
 const ASSETS = [
   './',
@@ -18,7 +21,7 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+      Promise.all(keys.filter(k => k !== CACHE && k.indexOf("baseball-gm-") === 0).map(k => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });
